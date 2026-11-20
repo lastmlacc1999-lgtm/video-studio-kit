@@ -10,19 +10,32 @@ const cleanModel = (m) => String(m || '').replace(/^models\//, '').trim();
 // Gemini 3 (and newer) validate thought signatures on function-call parts. The signature is
 // a field of the part next to functionCall, not inside functionCall. Keep it verbatim.
 // Docs: https://ai.google.dev/gemini-api/docs/thought-signatures
+// Marker for the installed replay logic; the patch README asks users to search for it.
+export const GEMINI_SIGNATURE_FIX = 2;
 const DUMMY_THOUGHT_SIGNATURE = 'skip_thought_signature_validator';
 const signatureOf = (part) => {
   const sig = part?.thoughtSignature ?? part?.thought_signature;
   return typeof sig === 'string' && sig ? sig : '';
 };
+const clone = (value) => (typeof structuredClone === 'function' ? structuredClone(value) : JSON.parse(JSON.stringify(value)));
 
-function toContents(system, messages) {
+// Gemini returns a thought signature beside a functionCall and validates it again on the
+// next request. Keeping the raw model parts is safer than rebuilding them: it preserves
+// signatures, thought parts and the original order exactly. `signAll` is the repair mode
+// used only after Gemini rejects a request; it fills every unsigned functionCall with the
+// documented dummy so a stricter model cannot reject the second/third call in a batch.
+function toContents(system, messages, { signAll = false } = {}) {
   const contents = [];
   const push = (role, parts) => {
     if (!parts.length) return;
     const last = contents[contents.length - 1];
     if (last && last.role === role) last.parts.push(...parts);
     else contents.push({ role, parts });
+  };
+  const signed = (part) => {
+    if (!signAll || !part?.functionCall || signatureOf(part)) return part;
+    part.thoughtSignature = DUMMY_THOUGHT_SIGNATURE;
+    return part;
   };
   for (const m of messages) {
     if (m.role === 'tool') {
@@ -31,6 +44,11 @@ function toContents(system, messages) {
       continue;
     }
     if (m.role === 'assistant') {
+      // The exact parts returned by Gemini. Do not reorder or drop thought/signature parts.
+      if (m.nativeParts?.length) {
+        push('model', m.nativeParts.map((p) => signed(clone(p))));
+        continue;
+      }
       const parts = [];
       const calls = m.toolCalls || [];
       const textSig = signatureOf(m);
@@ -50,7 +68,8 @@ function toContents(system, messages) {
       }
       // Old history, another provider, or a hand-built call has no signature. Gemini 3
       // rejects the whole request in that case; the documented dummy skips validation.
-      if (firstCall >= 0 && !signedCall) parts[firstCall].thoughtSignature = DUMMY_THOUGHT_SIGNATURE;
+      if (signAll) for (const part of parts) signed(part);
+      else if (firstCall >= 0 && !signedCall) parts[firstCall].thoughtSignature = DUMMY_THOUGHT_SIGNATURE;
       push('model', parts);
       continue;
     }
@@ -72,8 +91,8 @@ export function geminiClient({
   const headers = { 'x-goog-api-key': apiKey };
 
   async function chat({ system, messages, tools = null, jsonSchema = null, temperature, maxTokens, signal }) {
-    const body = { contents: toContents(system, messages) };
-    if (system) body.systemInstruction = { parts: [{ text: system }] };
+    const base = {};
+    if (system) base.systemInstruction = { parts: [{ text: system }] };
     const generationConfig = {};
     if (Number.isFinite(temperature)) generationConfig.temperature = temperature;
     if (Number.isFinite(maxTokens)) generationConfig.maxOutputTokens = maxTokens;
@@ -81,13 +100,28 @@ export function geminiClient({
       generationConfig.responseMimeType = 'application/json';
       generationConfig.responseSchema = toGeminiSchema(jsonSchema);
     }
-    if (Object.keys(generationConfig).length) body.generationConfig = generationConfig;
+    if (Object.keys(generationConfig).length) base.generationConfig = generationConfig;
     if (tools?.length) {
-      body.tools = [{ functionDeclarations: tools.map((t) => ({ name: t.name, description: t.description, parameters: toGeminiSchema(t.parameters) })) }];
-      body.toolConfig = { functionCallingConfig: { mode: 'AUTO' } };
+      base.tools = [{ functionDeclarations: tools.map((t) => ({ name: t.name, description: t.description, parameters: toGeminiSchema(t.parameters) })) }];
+      base.toolConfig = { functionCallingConfig: { mode: 'AUTO' } };
     }
+    const send = (signAll) => postJson(
+      endpoint,
+      { ...base, contents: toContents(system, messages, { signAll }) },
+      { headers, timeoutMs, signal, fetchImpl, provider: providerLabel },
+    );
+    const isSignatureError = (e) => e?.status === 400 && /thought[_ ]?signature/i.test(`${e.body || ''} ${e.message || ''}`);
 
-    const { json } = await postJson(endpoint, body, { headers, timeoutMs, signal, fetchImpl, provider: providerLabel });
+    let json;
+    try {
+      ({ json } = await send(false));
+    } catch (e) {
+      // Some Gemini 3.x models validate every functionCall part, not just the first one
+      // in a parallel batch. Retry once with the documented dummy on every unsigned call.
+      if (!isSignatureError(e)) throw e;
+      console.warn(`[${providerLabel}] thought_signature rejected; retrying with repaired history`);
+      ({ json } = await send(true));
+    }
     const blocked = json.promptFeedback?.blockReason;
     if (blocked) throw new LlmError(`${providerLabel} refused the prompt (${blocked})`, { provider: providerLabel, hint: 'Rephrase the idea; Gemini blocks some requests by policy.' });
     const candidate = json.candidates?.[0];
@@ -99,7 +133,7 @@ export function geminiClient({
     for (const part of parts) {
       const signature = signatureOf(part);
       if (signature) lastSignature = signature;
-      // Thought text is not the answer; it must not be shown or sent back as chat text.
+      // Thought text is not the answer, but the raw parts are kept for the next request.
       if (part.thought === true) continue;
       if (typeof part.text === 'string') textOut += part.text;
       if (part.functionCall?.name) {
@@ -121,6 +155,8 @@ export function geminiClient({
     return {
       text: textOut.trim(),
       toolCalls,
+      // Replay the exact model turn (thought parts, signatures and order) on the next call.
+      nativeParts: toolCalls.length ? clone(parts) : null,
       // A response without function calls can still carry a signature on its last part.
       thoughtSignature: toolCalls.length ? '' : lastSignature,
       raw: json,

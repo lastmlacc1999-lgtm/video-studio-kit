@@ -57,7 +57,7 @@ export function parseTextToolCalls(text) {
 
 const clip = (s, n = HISTORY_OUTPUT) => (String(s).length > n ? `${String(s).slice(0, n)}\n…[output cut]` : String(s));
 
-const sizeOf = (messages) => messages.reduce((n, m) => n + String(m.content ?? '').length + (m.toolCalls ? JSON.stringify(m.toolCalls).length : 0), 0);
+const sizeOf = (messages) => messages.reduce((n, m) => n + String(m.content ?? '').length + (m.toolCalls ? JSON.stringify(m.toolCalls).length : 0) + (m.nativeParts ? JSON.stringify(m.nativeParts).length : 0), 0);
 
 /**
  * Keep a long build inside a local model's context window: drop turns from the top,
@@ -133,7 +133,7 @@ export async function runToolLoop({
       return { text: res.text || '', steps: step, stopped: 'done', messages };
     }
 
-    messages.push({ role: 'assistant', content: res.text || '', toolCalls: calls, ...(res.thoughtSignature ? { thoughtSignature: res.thoughtSignature } : {}) });
+    messages.push({ role: 'assistant', content: res.text || '', toolCalls: calls, ...(res.nativeParts ? { nativeParts: res.nativeParts } : {}), ...(res.thoughtSignature ? { thoughtSignature: res.thoughtSignature } : {}) });
     let repeated = 0;
     for (const call of calls) {
       if (signal?.aborted) return { text: lastText, steps: step, stopped: 'aborted', messages };

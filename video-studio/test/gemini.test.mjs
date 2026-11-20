@@ -111,6 +111,72 @@ test('round-trips thought signatures on function-call parts', async () => {
   } finally { await server.close(); }
 });
 
+test('replays the exact native parts, including thought parts and their order', async () => {
+  const native = [
+    { text: 'I should read the skill first.', thought: true, thoughtSignature: 'sig-thought' },
+    { functionCall: { name: 'read_file', args: { path: 'SKILL.md' } }, thoughtSignature: 'sig-call' },
+  ];
+  const server = await mockServer((req, requests) => {
+    if (requests.length === 1) {
+      return { json: { candidates: [{ content: { role: 'model', parts: native }, finishReason: 'STOP' }] } };
+    }
+    assert.deepEqual(req.body.contents[1].parts, native);
+    return { json: geminiResponse({ text: 'finished' }) };
+  });
+  try {
+    const client = geminiClient({ baseUrl: server.url, apiKey: 'k', model: 'm' });
+    const first = await client.chat({ messages: [{ role: 'user', content: 'build' }], tools: TOOL_DEFS });
+    assert.deepEqual(first.nativeParts, native);
+    assert.equal(first.toolCalls[0].thoughtSignature, 'sig-call');
+    const second = await client.chat({
+      messages: [
+        { role: 'user', content: 'build' },
+        { role: 'assistant', content: first.text, toolCalls: first.toolCalls, nativeParts: first.nativeParts },
+        { role: 'tool', name: 'read_file', content: '# Skill' },
+      ],
+      tools: TOOL_DEFS,
+    });
+    assert.equal(second.text, 'finished');
+    assert.equal(server.requests.length, 2);
+  } finally { await server.close(); }
+});
+
+test('retries with a dummy signature on every call when Gemini rejects a batch', async () => {
+  const server = await mockServer((req, requests) => {
+    const parts = req.body.contents[1].parts;
+    if (requests.length === 1) {
+      assert.equal(parts[0].thoughtSignature, 'skip_thought_signature_validator');
+      assert.equal('thoughtSignature' in parts[1], false);
+      return {
+        status: 400,
+        json: { error: { code: 400, message: 'Function call is missing a thought_signature in functionCall parts. Additional data, function call `default_api:read_file`, position 2.' } },
+      };
+    }
+    assert.equal(requests.length, 2);
+    assert.equal(parts.length, 3);
+    for (const part of parts) assert.equal(part.thoughtSignature, 'skip_thought_signature_validator');
+    return { json: geminiResponse({ text: 'recovered' }) };
+  });
+  try {
+    const client = geminiClient({ baseUrl: server.url, apiKey: 'k', model: 'm' });
+    const res = await client.chat({
+      messages: [
+        { role: 'user', content: 'build' },
+        { role: 'assistant', content: '', toolCalls: [
+          { name: 'list_files', args: {} },
+          { name: 'read_file', args: { path: 'SKILL.md' } },
+          { name: 'grep', args: { pattern: 'x' } },
+        ] },
+        { role: 'tool', name: 'list_files', content: 'a.js' },
+        { role: 'tool', name: 'read_file', content: '# Skill' },
+        { role: 'tool', name: 'grep', content: 'x: 1' },
+      ],
+      tools: TOOL_DEFS,
+    });
+    assert.equal(res.text, 'recovered');
+  } finally { await server.close(); }
+});
+
 test('the native tool loop sends a prior call signature back with its functionCall', async () => {
   const server = await mockServer((req, requests) => {
     if (requests.length === 1) {

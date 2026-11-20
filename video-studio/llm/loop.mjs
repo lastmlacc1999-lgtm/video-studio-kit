@@ -120,20 +120,20 @@ export async function runToolLoop({
       if (useText && (unfinished || (!doneMarker && nudges < 2))) {
         // the model may have stopped to chat; ask whether it is really done
         nudges++;
-        messages.push({ role: 'assistant', content: res.text || '' });
+        messages.push({ role: 'assistant', content: res.text || '', ...(res.thoughtSignature ? { thoughtSignature: res.thoughtSignature } : {}) });
         messages.push({ role: 'user', content: 'Continue the build: call the next tool. If the video is completely finished, reply with "DONE: <what you built>".' });
         continue;
       }
       if (!useText && unfinished) {
         nudges++;
-        messages.push({ role: 'assistant', content: res.text || '' });
+        messages.push({ role: 'assistant', content: res.text || '', ...(res.thoughtSignature ? { thoughtSignature: res.thoughtSignature } : {}) });
         messages.push({ role: 'user', content: 'The project is not finished yet: there is no final.mp4 marked done. Continue with the next tool call (render, check, register the clip, stitch), then call vs.mjs done.' });
         continue;
       }
       return { text: res.text || '', steps: step, stopped: 'done', messages };
     }
 
-    messages.push({ role: 'assistant', content: res.text || '', toolCalls: calls });
+    messages.push({ role: 'assistant', content: res.text || '', toolCalls: calls, ...(res.thoughtSignature ? { thoughtSignature: res.thoughtSignature } : {}) });
     let repeated = 0;
     for (const call of calls) {
       if (signal?.aborted) return { text: lastText, steps: step, stopped: 'aborted', messages };

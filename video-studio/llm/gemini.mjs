@@ -7,6 +7,15 @@ import { proxyFetch } from './net.mjs';
 
 const cleanModel = (m) => String(m || '').replace(/^models\//, '').trim();
 
+// Gemini 3 (and newer) validate thought signatures on function-call parts. The signature is
+// a field of the part next to functionCall, not inside functionCall. Keep it verbatim.
+// Docs: https://ai.google.dev/gemini-api/docs/thought-signatures
+const DUMMY_THOUGHT_SIGNATURE = 'skip_thought_signature_validator';
+const signatureOf = (part) => {
+  const sig = part?.thoughtSignature ?? part?.thought_signature;
+  return typeof sig === 'string' && sig ? sig : '';
+};
+
 function toContents(system, messages) {
   const contents = [];
   const push = (role, parts) => {
@@ -23,8 +32,25 @@ function toContents(system, messages) {
     }
     if (m.role === 'assistant') {
       const parts = [];
-      if (m.content) parts.push({ text: String(m.content) });
-      for (const tc of m.toolCalls || []) parts.push({ functionCall: { name: tc.name, args: tc.args ?? {} } });
+      const calls = m.toolCalls || [];
+      const textSig = signatureOf(m);
+      if (m.content || (textSig && !calls.length)) {
+        const textPart = { text: String(m.content || '') };
+        if (textSig) textPart.thoughtSignature = textSig;
+        parts.push(textPart);
+      }
+      let firstCall = -1;
+      let signedCall = false;
+      for (const tc of calls) {
+        const callPart = { functionCall: { name: tc.name, args: tc.args ?? {} } };
+        const sig = signatureOf(tc);
+        if (sig) { callPart.thoughtSignature = sig; signedCall = true; }
+        if (firstCall < 0) firstCall = parts.length;
+        parts.push(callPart);
+      }
+      // Old history, another provider, or a hand-built call has no signature. Gemini 3
+      // rejects the whole request in that case; the documented dummy skips validation.
+      if (firstCall >= 0 && !signedCall) parts[firstCall].thoughtSignature = DUMMY_THOUGHT_SIGNATURE;
       push('model', parts);
       continue;
     }
@@ -68,23 +94,39 @@ export function geminiClient({
     if (!candidate) throw new LlmError(`${providerLabel} returned no candidates`, { provider: providerLabel, body: JSON.stringify(json).slice(0, 500) });
     const parts = candidate.content?.parts || [];
     let textOut = '';
+    let lastSignature = '';
     const toolCalls = [];
     for (const part of parts) {
+      const signature = signatureOf(part);
+      if (signature) lastSignature = signature;
+      // Thought text is not the answer; it must not be shown or sent back as chat text.
+      if (part.thought === true) continue;
       if (typeof part.text === 'string') textOut += part.text;
       if (part.functionCall?.name) {
-        toolCalls.push({
+        const call = {
           id: `gemini_${toolCalls.length}`,
           name: part.functionCall.name,
           args: part.functionCall.args || {},
           argumentsText: JSON.stringify(part.functionCall.args || {}),
           error: null,
-        });
+        };
+        // Parallel calls only sign the first functionCall part; preserve that exactly.
+        if (signature) call.thoughtSignature = signature;
+        toolCalls.push(call);
       }
     }
     if (candidate.finishReason && ['SAFETY', 'RECITATION', 'BLOCKLIST'].includes(candidate.finishReason) && !textOut && !toolCalls.length) {
       throw new LlmError(`${providerLabel} stopped (${candidate.finishReason})`, { provider: providerLabel, hint: 'Soften the idea or try another model.' });
     }
-    return { text: textOut.trim(), toolCalls, raw: json, finishReason: candidate.finishReason || '', mode: tools?.length ? 'native' : 'text' };
+    return {
+      text: textOut.trim(),
+      toolCalls,
+      // A response without function calls can still carry a signature on its last part.
+      thoughtSignature: toolCalls.length ? '' : lastSignature,
+      raw: json,
+      finishReason: candidate.finishReason || '',
+      mode: tools?.length ? 'native' : 'text',
+    };
   }
 
   async function listModels() {

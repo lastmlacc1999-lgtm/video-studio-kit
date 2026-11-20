@@ -50,9 +50,18 @@ export function chatResponse({ content = '', toolCalls = [], finish = 'stop' } =
   return { id: 'chatcmpl-test', object: 'chat.completion', choices: [{ index: 0, message, finish_reason: finish }] };
 }
 
-export function geminiResponse({ text = '', functionCalls = [], finishReason = 'STOP' } = {}) {
+export function geminiResponse({ text = '', functionCalls = [], finishReason = 'STOP', textSignature = '', thought = '' } = {}) {
   const parts = [];
-  if (text) parts.push({ text });
-  for (const f of functionCalls) parts.push({ functionCall: { name: f.name, args: f.args || {} } });
+  if (thought) parts.push({ text: thought, thought: true });
+  if (text || textSignature) {
+    const textPart = { text };
+    if (textSignature) textPart.thoughtSignature = textSignature;
+    parts.push(textPart);
+  }
+  for (const f of functionCalls) {
+    const callPart = { functionCall: { name: f.name, args: f.args || {} } };
+    if (f.thoughtSignature) callPart.thoughtSignature = f.thoughtSignature;
+    parts.push(callPart);
+  }
   return { candidates: [{ content: { role: 'model', parts }, finishReason }] };
 }

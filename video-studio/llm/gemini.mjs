@@ -88,9 +88,27 @@ function toContents(system, messages, { signMode = 'exact' } = {}) {
   return contents;
 }
 
+
+// Gemini's free tier is rate limited per minute as well as per day (5 RPM on the Flash
+// models, 15 RPM on Flash-Lite). The build loop sends a request after every tool step, so
+// pace the client instead of firing them back-to-back. Paid users can set
+// VS_GEMINI_MIN_INTERVAL_MS=0 (or a smaller value) to remove the delay.
+export function geminiInterval(model) {
+  const env = Number(process.env.VS_GEMINI_MIN_INTERVAL_MS ?? process.env.VS_LLM_MIN_INTERVAL_MS);
+  if (Number.isFinite(env) && env >= 0) return env;
+  return /flash[-_ ]?lite/i.test(cleanModel(model)) ? 4500 : 12500;
+}
+
+const pause = (ms, signal) => new Promise((resolve) => {
+  if (!(ms > 0)) return resolve();
+  const timer = setTimeout(resolve, ms);
+  signal?.addEventListener?.('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+});
+
 export function geminiClient({
   baseUrl = 'https://generativelanguage.googleapis.com', apiKey, model,
   timeoutMs = 900000, providerLabel = 'Gemini', fetchImpl = proxyFetch(), onLog = null,
+  minIntervalMs = 0, retryDelayMs = 15000,
 } = {}) {
   if (!apiKey) throw new LlmError(`${providerLabel}: no API key`, { provider: providerLabel, hint: 'Add a Gemini API key in Model settings, or set GEMINI_API_KEY.' });
   const root = String(baseUrl || '').replace(/\/+$/, '');
@@ -100,6 +118,13 @@ export function geminiClient({
   const endpoint = `${apiRoot}/models/${encodeURIComponent(name)}:generateContent`;
   const headers = { 'x-goog-api-key': apiKey };
   onLog?.(`Gemini signature fix v${GEMINI_SIGNATURE_FIX} active`);
+  if (minIntervalMs > 0) onLog?.(`Gemini pacing: one request every ${(minIntervalMs / 1000).toFixed(1)}s (per-minute limit guard)`);
+  let nextRequestAt = 0;
+  const pace = async (signal) => {
+    const wait = Math.max(0, nextRequestAt - Date.now());
+    if (wait) await pause(wait, signal);
+    nextRequestAt = Date.now() + Math.max(0, minIntervalMs);
+  };
 
   async function chat({ system, messages, tools = null, jsonSchema = null, temperature, maxTokens, signal }) {
     const base = {};
@@ -116,12 +141,38 @@ export function geminiClient({
       base.tools = [{ functionDeclarations: tools.map((t) => ({ name: t.name, description: t.description, parameters: toGeminiSchema(t.parameters) })) }];
       base.toolConfig = { functionCallingConfig: { mode: 'AUTO' } };
     }
-    const send = (signMode) => postJson(
-      endpoint,
-      { ...base, contents: toContents(system, messages, { signMode }) },
-      { headers, timeoutMs, signal, fetchImpl, provider: providerLabel },
-    );
     const isSignatureError = (e) => e?.status === 400 && /thought[_ ]?signature/i.test(`${e.body || ''} ${e.message || ''}`);
+    const isDailyQuota = (e) => e?.status === 429 && /per day|daily/i.test(`${e.body || ''} ${e.message || ''}`);
+    const retryAfterMs = (e) => {
+      const match = /"?retryDelay"?\s*:\s*"?(\d+(?:\.\d+)?)s/i.exec(String(e?.body || ''));
+      return match ? Math.ceil(Number(match[1]) * 1000) : 0;
+    };
+    const send = async (signMode) => {
+      let lastError;
+      for (let attempt = 0; attempt <= 2; attempt++) {
+        await pace(signal);
+        try {
+          return await postJson(
+            endpoint,
+            { ...base, contents: toContents(system, messages, { signMode }) },
+            { headers, timeoutMs, signal, fetchImpl, provider: providerLabel, retries: 0 },
+          );
+        } catch (e) {
+          lastError = e;
+          if (isDailyQuota(e)) {
+            e.hint = 'The Gemini free-tier daily request limit is used up. Wait for the midnight Pacific reset, or switch the build model/provider (Claude Code, OpenAI, or a paid Gemini tier).';
+            throw e;
+          }
+          if (e?.status === 429 || e?.status >= 500) {
+            const wait = retryAfterMs(e) || (e.status === 429 ? Math.max(minIntervalMs, retryDelayMs) : 2000 * 2 ** attempt);
+            nextRequestAt = Math.max(nextRequestAt, Date.now() + wait);
+            if (attempt < 2) continue;
+          }
+          throw e;
+        }
+      }
+      throw lastError;
+    };
 
     let json = null;
     try {

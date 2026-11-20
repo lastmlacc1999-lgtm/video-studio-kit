@@ -2,7 +2,7 @@
 import { LlmError } from './http.mjs';
 import { extractJson } from './json.mjs';
 import { openaiClient } from './openai.mjs';
-import { geminiClient } from './gemini.mjs';
+import { geminiClient, geminiInterval } from './gemini.mjs';
 import { ensureLocalServer, listLocalModels, localBaseUrl, stopLocalServer } from './local.mjs';
 import { claudeReady, describeConfig } from './config.mjs';
 import { proxyFetch } from './net.mjs';
@@ -34,6 +34,7 @@ export async function createClient(cfg, purpose = 'build', { onLog, signal, fetc
       providerLabel: cfg.label,
       fetchImpl,
       onLog,
+      minIntervalMs: geminiInterval(purpose === 'script' ? cfg.scriptModel : cfg.buildModel),
     });
   }
 

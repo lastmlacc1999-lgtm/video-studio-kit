@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { geminiClient } from '../llm/gemini.mjs';
+import { geminiClient, geminiInterval } from '../llm/gemini.mjs';
 import { runToolLoop } from '../llm/loop.mjs';
 import { TOOL_DEFS } from '../llm/tools.mjs';
 import { SCENE_SCHEMA } from '../llm/json.mjs';
@@ -326,4 +326,61 @@ test('lists only text-generation models', async () => {
 
 test('requires a key up front', () => {
   assert.throws(() => geminiClient({ apiKey: '', model: 'm' }), /no API key/);
+});
+
+test('paces Gemini requests to the free-tier per-minute limit', async () => {
+  const stamps = [];
+  const server = await mockServer(() => {
+    stamps.push(Date.now());
+    return { json: geminiResponse({ text: 'ok' }) };
+  });
+  try {
+    const client = geminiClient({ baseUrl: server.url, apiKey: 'k', model: 'm', minIntervalMs: 150 });
+    await client.chat({ messages: [{ role: 'user', content: 'one' }] });
+    await client.chat({ messages: [{ role: 'user', content: 'two' }] });
+    assert.equal(stamps.length, 2);
+    assert.ok(stamps[1] - stamps[0] >= 120, `expected >=120ms between calls, got ${stamps[1] - stamps[0]}`);
+  } finally { await server.close(); }
+});
+
+test('does not retry a daily Gemini quota error and explains the reset', async () => {
+  const server = await mockServer(() => ({
+    status: 429,
+    json: { error: { code: 429, message: 'You exceeded your current quota: per day limit exceeded on Free Tier.', status: 'RESOURCE_EXHAUSTED' } },
+  }));
+  try {
+    const client = geminiClient({ baseUrl: server.url, apiKey: 'k', model: 'm' });
+    await assert.rejects(
+      () => client.chat({ messages: [{ role: 'user', content: 'x' }] }),
+      (e) => e.status === 429 && /daily request limit/.test(e.hint),
+    );
+    assert.equal(server.requests.length, 1);
+  } finally { await server.close(); }
+});
+
+test('retries a per-minute Gemini 429 after the retry delay', async () => {
+  const server = await mockServer((req, requests) => {
+    if (requests.length === 1) {
+      return {
+        status: 429,
+        json: { error: { code: 429, message: 'Resource exhausted: per minute limit.', details: [{ retryDelay: '0.01s' }] } },
+      };
+    }
+    return { json: geminiResponse({ text: 'after wait' }) };
+  });
+  try {
+    const client = geminiClient({ baseUrl: server.url, apiKey: 'k', model: 'm', retryDelayMs: 20 });
+    const res = await client.chat({ messages: [{ role: 'user', content: 'x' }] });
+    assert.equal(res.text, 'after wait');
+    assert.equal(server.requests.length, 2);
+  } finally { await server.close(); }
+});
+
+test('picks a request interval from the model and the environment', () => {
+  assert.equal(geminiInterval('gemini-3.8-flash'), 12500);
+  assert.equal(geminiInterval('gemini-3.1-flash-lite'), 4500);
+  const old = process.env.VS_GEMINI_MIN_INTERVAL_MS;
+  process.env.VS_GEMINI_MIN_INTERVAL_MS = '0';
+  try { assert.equal(geminiInterval('gemini-3.8-flash'), 0); }
+  finally { if (old === undefined) delete process.env.VS_GEMINI_MIN_INTERVAL_MS; else process.env.VS_GEMINI_MIN_INTERVAL_MS = old; }
 });

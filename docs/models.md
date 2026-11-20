@@ -47,7 +47,7 @@ The `/video-studio` slash command and every skill in `.claude/skills/` still use
 
 The studio calls `POST /v1beta/models/<model>:generateContent`, sends tools as `functionDeclarations` and the script schema as a `responseSchema` (JSON Schema adapted to Google's OpenAPI subset).
 
-**If you see `429` or quota errors**: the build loop makes many calls. Use Flash for the script and Pro only for the build, or switch to a local model for experimenting.
+**If you see `429` or quota errors**: the build loop makes many calls. Gemini's free tier is small (5 requests/minute on the Flash models, 15 on Flash-Lite, and a daily cap), so the client paces requests automatically: 12.5 s between calls for Flash, 4.5 s for Flash-Lite. Paid keys can set `VS_GEMINI_MIN_INTERVAL_MS=0` to remove the wait. If the daily cap is exhausted, wait for the midnight Pacific reset or build with Claude Code, OpenAI, or a local model.
 
 ---
 
@@ -192,6 +192,7 @@ Saved in `video-studio/llm.config.json` (git-ignored, mode 600). Environment var
 | `maxSteps` | `VS_MAX_STEPS` | maximum tool rounds per build (default 160) |
 | `temperature` | `VS_TEMPERATURE` | default 0.6 |
 | `timeoutMs` | `VS_LLM_TIMEOUT` | per-request timeout (default 15 min) |
+| — | `VS_GEMINI_MIN_INTERVAL_MS` | milliseconds between Gemini requests; `0` disables pacing. Default: 12500 for Flash, 4500 for Flash-Lite |
 | — | `VS_LLAMA_LOAD_TIMEOUT` | seconds to wait for a GGUF model to load (default 240) |
 | — | `VS_LLAMA_ARGS` | extra flags appended to the llama-server command |
 | — | `VS_CONFIG` | use a different config file (handy for testing) |

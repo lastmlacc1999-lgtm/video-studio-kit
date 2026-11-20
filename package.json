@@ -7,6 +7,7 @@
   "scripts": {
     "studio": "node video-studio/vs.mjs serve",
     "setup": "node setup.mjs",
-    "test": "node video-studio/test/run.mjs"
+    "test": "node video-studio/test/run.mjs",
+    "web:sync": "node video-studio/web/sync.mjs"
   }
 }

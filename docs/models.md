@@ -18,6 +18,18 @@ You can use different models for the two jobs; the script is a small task, the b
 
 ---
 
+## Browser app (`/app/`)
+
+`http://localhost:4790/app/` is a static page that writes scripts without involving the studio server: the calls go from your browser to Gemini, OpenAI or a local endpoint, and projects are stored in IndexedDB. It has its own model settings (kept in the browser), separate from `video-studio/llm.config.json`; the studio's ⚙ panel is still what picks the **build** model.
+
+- **Keys** live in this browser only (localStorage if you tick *Remember*, otherwise the tab's session storage) and are sent straight to the provider. The studio API never sees them.
+- **Rendering** is optional. When a studio is reachable the page sends the project (`PUT /api/project/<slug>`, then `/build`) and polls the log and final video. Without one it offers a project download and the `vs.mjs new` / `serve` commands.
+- **Serving.** `/app/` is served by the studio and is the easiest setup. Any static host works for writing; then set the studio URL in the page's settings and serve the page from localhost, because the studio only allows loopback origins and an `https` page cannot call `http://127.0.0.1`.
+- **Provider CORS.** Gemini and OpenAI allow browser requests. Ollama denies unknown web origins by default — start it with `OLLAMA_ORIGINS=*` (or the page's origin). llama-server needs its CORS support enabled. If a provider blocks the page, use the studio backend instead.
+- **Keeping in sync.** `npm run web:sync` regenerates `web/styles.json` and copies the shared scene/prompt modules into `web/lib/`; `npm test` fails if the copies drift.
+
+---
+
 ## Claude Code (default)
 
 Nothing to configure. The studio runs `claude -p` exactly as earlier versions did. Install it from <https://claude.com/claude-code> and run `claude` once to log in.
@@ -201,6 +213,7 @@ npm run studio
 - The settings API never returns the key; it only reports whether one is set and whether it came from an environment variable.
 - The server binds to `127.0.0.1` by default. Do not expose it to your network with `VS_HOST=0.0.0.0` unless you understand that anyone who can reach it can change your model settings.
 - Build tools are jailed to this repository and the project folder; the model cannot write outside them through the tools.
+- The **browser app** stores its keys in this browser (localStorage, or sessionStorage when *Remember* is off) and sends them only to the provider — never to the studio server. Because the studio accepts API calls from any loopback origin (so the browser app works when served by another local static server), avoid running other localhost pages you do not trust. The browser app itself is static: it has no server-side code and no access to your filesystem.
 
 ---
 

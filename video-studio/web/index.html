@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Video Studio · Browser</title>
+<meta name="description" content="Write a video script with Gemini, GPT or a local model — right in your browser.">
+<link rel="icon" href="./favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="./app.css">
+</head>
+<body>
+<div class="shell">
+  <header class="top">
+    <a class="brand" href="./" title="Video Studio">
+      <span class="spark">✳</span>
+      <span class="brand-text"><b>Video Studio</b><small>browser app</small></span>
+    </a>
+    <div class="top-right">
+      <button id="modelPill" class="pill" title="Model used to write scripts">Model: —</button>
+      <button id="studioPill" class="pill" title="Local studio server and render status">Local studio: checking…</button>
+      <button id="settingsBtn" class="btn ghost icon" title="Model settings" aria-label="Model settings">⚙</button>
+    </div>
+  </header>
+
+  <aside class="side">
+    <div class="side-actions">
+      <button id="newBtn" class="btn primary wide">+ New video</button>
+      <button id="importBtn" class="btn ghost" title="Import a project JSON">Import</button>
+      <input id="importFile" type="file" accept="application/json,.json" hidden>
+    </div>
+
+    <div class="side-title">Your videos <span id="projectCount" class="count"></span></div>
+    <div id="projects" class="projects" aria-live="polite"></div>
+
+    <div class="side-title">Style <span class="count" id="styleCount"></span></div>
+    <input id="styleSearch" class="search" type="search" placeholder="Filter 109 styles…" autocomplete="off">
+    <div id="styles" class="styles"></div>
+  </aside>
+
+  <main class="main">
+    <section id="empty" class="card empty">
+      <h1>Make a video, right here.</h1>
+      <p>The browser app writes a timed, scene-by-scene script with <b>Gemini</b>, <b>GPT</b> or a <b>local model</b>. Your key stays in this browser. When you are ready to render, hand the project to the local studio — rendering needs ffmpeg, the style skills and this computer.</p>
+      <ul class="empty-points">
+        <li><b>1.</b> Pick a style and describe your idea.</li>
+        <li><b>2.</b> Write the script, then edit every scene.</li>
+        <li><b>3.</b> Render with the local studio, or download the project.</li>
+      </ul>
+      <div class="empty-actions">
+        <button id="emptyNew" class="btn primary">+ New video</button>
+        <button id="emptySettings" class="btn ghost">Model settings</button>
+      </div>
+      <p class="tiny">No studio server? The app still writes and stores scripts. Open <code>/app/</code> from the studio (default <code>http://localhost:4790</code>) to render here.</p>
+    </section>
+
+    <section id="editor" class="editor" hidden>
+      <div class="card composer">
+        <textarea id="idea" rows="3" placeholder="Describe the video you want… e.g. A 30-second story about a cat who learns to fly"></textarea>
+        <div class="composer-row">
+          <button id="styleChip" class="chip" title="Pick a style on the left">Pick a style</button>
+          <select id="format" class="select" title="Format" aria-label="Format">
+            <option value="9:16">9:16</option><option value="16:9">16:9</option><option value="1:1">1:1</option>
+          </select>
+          <select id="music" class="select" title="Music" aria-label="Music">
+            <option value="lofi">lofi</option><option value="ambient">ambient</option><option value="upbeat">upbeat</option><option value="epic">epic</option><option value="none">no music</option>
+          </select>
+          <span class="grow"></span>
+          <button id="writeBtn" class="btn primary">Write script</button>
+        </div>
+        <div id="writeStatus" class="status" hidden aria-live="polite"></div>
+      </div>
+
+      <div class="card script">
+        <header class="script-head">
+          <input id="title" class="title-input" placeholder="Untitled video" aria-label="Video title">
+          <div class="script-meta">
+            <span id="sceneMeta">0 scenes</span>
+            <span id="modelLine" class="muted"></span>
+          </div>
+          <div class="script-actions">
+            <button id="addScene" class="btn ghost small">+ Scene</button>
+            <button id="exportBtn" class="btn ghost small" title="Download this project as JSON">Export</button>
+            <button id="deleteBtn" class="btn ghost small danger" title="Delete this video">Delete</button>
+          </div>
+        </header>
+
+        <div id="stylePreviewWrap" class="style-preview" hidden>
+          <video id="stylePreview" muted loop playsinline preload="none"></video>
+          <span id="stylePreviewName"></span>
+        </div>
+
+        <div id="scenes" class="scenes"></div>
+
+        <div class="validate-row">
+          <div id="validation" class="validation" aria-live="polite"></div>
+          <button id="buildBtn" class="btn primary">Render with local tools</button>
+        </div>
+      </div>
+
+      <div id="buildPanel" class="card build" hidden>
+        <header class="build-head">
+          <div><span class="kicker">Build</span><b id="buildTitle">Waiting…</b></div>
+          <div class="build-actions">
+            <button id="stopBtn" class="btn ghost small danger" hidden>Stop</button>
+            <button id="revealBtn" class="btn ghost small" hidden>Open folder</button>
+          </div>
+        </header>
+        <div id="buildBody" class="build-body">
+          <div id="offlineActions" hidden>
+            <p>Rendering needs the local tools. Download the project, then run these two commands in the repo:</p>
+            <pre id="offlineCmd"></pre>
+            <div class="row">
+              <button id="downloadBtn" class="btn primary small">Download project JSON</button>
+              <button id="copyCmd" class="btn ghost small">Copy commands</button>
+            </div>
+            <p class="tiny">Then open the project in the studio and press <b>Validate script &amp; generate video</b>. The studio’s ⚙ panel chooses which model builds.</p>
+          </div>
+          <div id="liveBuild" hidden>
+            <div class="build-status"><span id="buildState" class="dot"></span><span id="buildStateText"></span></div>
+            <pre id="buildLog" class="log"></pre>
+            <div id="videoWrap" hidden>
+              <video id="finalVideo" controls playsinline></video>
+              <p class="tiny" id="finalPath"></p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="settingsModal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+  <div class="modal-card">
+    <header class="modal-head">
+      <div><span class="kicker">Model</span><h2 id="settingsTitle">Who writes the script</h2></div>
+      <button id="setClose" class="btn ghost">Close</button>
+    </header>
+
+    <div class="field">
+      <label class="label" for="setProvider">Provider</label>
+      <select id="setProvider" class="select wide">
+        <option value="gemini">Google Gemini</option>
+        <option value="openai">OpenAI GPT (or any OpenAI-compatible endpoint)</option>
+        <option value="local">Local model (llama.cpp, Ollama, LM Studio)</option>
+      </select>
+      <small id="setProviderHint" class="hint"></small>
+    </div>
+
+    <div class="field" id="keyField">
+      <label class="label" for="setKey">API key</label>
+      <div class="row">
+        <input id="setKey" type="password" autocomplete="off" spellcheck="false" placeholder="paste the key">
+        <button id="setForget" class="btn ghost small" type="button">Forget</button>
+      </div>
+      <small id="setKeyState" class="hint"></small>
+      <label class="check"><input id="setRemember" type="checkbox" checked> Remember the key in this browser</label>
+      <small class="hint">Keys are stored only on this device and go straight to the provider. They are never sent to the studio server.</small>
+    </div>
+
+    <div class="field">
+      <label class="label" for="setModel">Model</label>
+      <div class="row">
+        <input id="setModel" list="setModelList" autocomplete="off" spellcheck="false" placeholder="model name">
+        <button id="loadModels" class="btn ghost small" type="button">Load models</button>
+      </div>
+      <datalist id="setModelList"></datalist>
+    </div>
+
+    <div class="field" id="baseField">
+      <label class="label" for="setBase">Base URL</label>
+      <input id="setBase" autocomplete="off" spellcheck="false" placeholder="https://…">
+      <small id="baseHint" class="hint"></small>
+    </div>
+
+    <div class="settings-actions">
+      <button id="setTest" class="btn ghost small" type="button">Test connection</button>
+      <span class="grow"></span>
+      <button id="setSave" class="btn primary small" type="button">Save</button>
+    </div>
+    <div id="setStatus" class="status" hidden aria-live="polite"></div>
+
+    <hr class="rule">
+
+    <div class="field">
+      <span class="kicker">Local studio</span>
+      <label class="label" for="setStudio">Studio server URL</label>
+      <div class="row">
+        <input id="setStudio" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:4790">
+        <button id="useThis" class="btn ghost small" type="button">Use this page</button>
+      </div>
+      <small class="hint">Leave empty to use this page’s server. The studio renders the video with ffmpeg and the style skills, and its own ⚙ panel picks the build model.</small>
+      <div class="row">
+        <button id="checkStudio" class="btn ghost small" type="button">Check studio</button>
+        <span id="studioState" class="hint"></span>
+      </div>
+    </div>
+
+    <p class="tiny modal-foot">Gemini and OpenAI are called directly from this page. If a provider blocks browser requests, use the studio server backend instead (README → Model backends).</p>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden aria-live="polite"></div>
+<noscript><p class="noscript">Video Studio’s browser app needs JavaScript.</p></noscript>
+<script type="module" src="./app.js"></script>
+</body>
+</html>

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Video Studio: a tiny local server for the UI, plus the commands the builder uses to talk to it.
 //   node vs.mjs serve [--port 4790]                 start the UI (http://localhost:4790)
+//   Browser app: http://localhost:4790/app/ (static page, model calls from the browser)
 //   Model settings: GET/PUT /api/settings, POST /api/settings/test, GET /api/settings/models
 //   node vs.mjs new <slug> <project.json>           create/replace a project from a file
 //   node vs.mjs wait <slug> [--timeout 3600]        block until the user presses Build or sends a note; prints JSON
@@ -40,7 +41,7 @@ const blank = (slug) => ({ slug, title: slug, idea: '', format: '9:16', voice: {
 
 const settings = (cfg) => ({ ...publicConfig(cfg), backend: describeConfig(cfg) });
 
-const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.mp4': 'video/mp4', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml' };
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.mp4': 'video/mp4', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8' };
 
 function sendFile(req, res, file) {
   if (!fs.existsSync(file) || !fs.statSync(file).isFile()) { res.writeHead(404); return res.end('not found'); }
@@ -58,10 +59,38 @@ const json = (res, code, data) => { res.writeHead(code, { 'Content-Type': 'appli
 const body = (req) => new Promise((ok) => { let b = ''; req.on('data', (d) => (b += d)); req.on('end', () => { try { ok(b ? JSON.parse(b) : {}); } catch { ok({}); } }); });
 const inside = (base, p) => { const f = path.resolve(base, p); return f.startsWith(path.resolve(base) + path.sep) ? f : null; };
 
+// The browser app can be hosted on any local page (or opened from file://) and still talk to
+// this studio. Only loopback origins are allowed, so other websites cannot read your projects.
+function cors(req, res) {
+  const origin = req.headers.origin;
+  if (!origin) return;
+  let allowed = origin === 'null';
+  if (!allowed) {
+    try {
+      const u = new URL(origin);
+      allowed = (u.protocol === 'http:' || u.protocol === 'https:')
+        && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(u.hostname);
+    } catch { /* not a URL */ }
+  }
+  if (!allowed) return;
+  res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, PUT, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Max-Age', '600');
+}
+
 async function handle(req, res) {
+  cors(req, res);
+  if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
+
   const u = new URL(req.url, 'http://x'), p = decodeURIComponent(u.pathname);
   if (p === '/' ) return sendFile(req, res, path.join(ROOT, 'ui', 'index.html'));
   if (p.startsWith('/ui/')) { const f = inside(path.join(ROOT, 'ui'), p.slice(4)); return f ? sendFile(req, res, f) : json(res, 403, {}); }
+  // standalone browser app (static: keys and projects stay in the browser)
+  if (p === '/app') { res.writeHead(302, { Location: '/app/' }); return res.end(); }
+  if (p === '/app/') return sendFile(req, res, path.join(ROOT, 'web', 'index.html'));
+  if (p.startsWith('/app/')) { const f = inside(path.join(ROOT, 'web'), p.slice(5)); return f ? sendFile(req, res, f) : json(res, 403, {}); }
   if (p.startsWith('/examples/')) { const f = inside(path.join(ROOT, 'examples'), p.slice(10)); return f ? sendFile(req, res, f) : json(res, 403, {}); }
   if (p.startsWith('/files/')) { const f = inside(PROJECTS, p.slice(7)); return f ? sendFile(req, res, f) : json(res, 403, {}); }
   if (p === '/api/catalog') { // only styles whose example clip exists (previews appear as they finish rendering)

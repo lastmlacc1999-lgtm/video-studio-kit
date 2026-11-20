@@ -57,6 +57,8 @@ You can run it again safely. `npm test` runs the model-backend test suite (no AP
 4. Choose the voice-over (off by default) and the music.
 5. Press **Validate script & generate video**. The model renders each scene and stitches them. When it finishes, the video opens in a window with **Open folder** and **Save a copy**. Finished videos are also copied to `outputs/`.
 
+Prefer to write scripts in a page with no studio server? Open http://localhost:4790/app/ — see [Browser app](#browser-app).
+
 **In Claude Code.** Open a terminal in this folder, run `claude`, then type `/video-studio a 30-second story about …`.
 
 ## Choose the model
@@ -76,6 +78,18 @@ Click **⚙** next to **+ New video**. The same model writes the script and runs
 
 Everything else in the kit — the 50+ skills, the `/video-studio` slash command, the Blender tooling — still uses Claude Code when you run it from a Claude Code session. The model panel changes the studio app's two buttons.
 
+## Browser app
+
+There is also a standalone page for writing scripts without the studio server: **<http://localhost:4790/app/>**. It is plain static files (`video-studio/web/`), so any static host can serve it.
+
+- Pick **Gemini**, **OpenAI GPT** or a **local endpoint**, paste your key (optional for local servers), press **Test connection**, then write and edit the script scene by scene.
+- Videos live in your browser (IndexedDB), with autosave, **Export**/**Import** and a project list. Nothing is uploaded anywhere except your prompt to the provider you chose.
+- Keys stay in this browser — localStorage when **Remember the key** is checked, otherwise the tab's session storage — and go straight to the provider. The studio server never receives them.
+- **Render with local tools** hands the project to the studio on this computer and starts the build (using the studio's own ⚙ backend). With no studio running, **Download project JSON** and the two commands shown render it locally. The page can also point at a studio URL in its settings.
+- The page is served at `/app/` by the studio. If you host it elsewhere, set the studio URL and serve the page over `http://` from localhost: the studio allows loopback origins only, and an `https` page cannot call `http://127.0.0.1`.
+- Gemini and OpenAI accept browser requests. Local servers may not: Ollama needs `OLLAMA_ORIGINS=*` (or this page's origin), and llama-server must allow CORS. If a provider blocks the browser, use the studio's backend instead.
+- `npm run web:sync` refreshes `web/styles.json` and the scene/prompt modules copied into `web/lib/`; a test fails if they drift from the server sources.
+
 ## How it uses your subscription
 
 With the default backend, writing a script is one short Claude Code call. Building a video runs Claude Code headless (`claude -p`) in this folder with file and shell tools: it reads the style's skill, writes the scene code, renders and checks frames. That uses your plan's usage like a long conversation does, and depends on the style and length. Nothing is billed separately, and nothing is sent anywhere except to Claude through Claude Code.
@@ -94,7 +108,7 @@ With Gemini, OpenAI or a local model, the studio runs the same job itself: it se
 
 | Folder | What's in it |
 |---|---|
-| `video-studio/` | the app (`vs.mjs` server, `agent.mjs` builder, `llm/` model backends, `ui/`, `catalog.json`, `tools/`, `examples/`) |
+| `video-studio/` | the app (`vs.mjs` server, `agent.mjs` builder, `llm/` model backends, `ui/`, `web/` browser app, `catalog.json`, `tools/`, `examples/`) |
 | `.claude/skills/` | the skills, including `video-studio`, the orchestrator |
 | `studio/` | the tvhead engine, with the Kokoro voice patch |
 | `demos/` | the working setup of each tool that the build recipes start from |

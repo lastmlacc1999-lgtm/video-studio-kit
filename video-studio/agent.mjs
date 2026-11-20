@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { resolveConfig, describeConfig, backendLine } from './llm/config.mjs';
 import { SCENE_SCHEMA, normalizeScript } from './llm/json.mjs';
+import { SCRIPT_SYSTEM, scriptInput } from './llm/script-prompt.mjs';
 import { createClient, requestJson, LlmError } from './llm/index.mjs';
 import { runToolLoop } from './llm/loop.mjs';
 import { createToolkit } from './llm/tools.mjs';
@@ -207,14 +208,8 @@ export async function writeScript(prompt, format = '9:16', style = null) {
     log: [{ at: now(), text: `${backendLine(cfg, 'script')} is writing the script in ${styleName}…` }], final: null, createdAt: now(),
   });
 
-  const system = 'You are a short-form video director. You turn an idea into a script told scene by scene, second by second, and pick the best available animation tool for each scene. Return only the JSON requested.';
-  const input = `The user's idea:\n"""${prompt}"""\n\nFormat: ${format}.\n\nThe user chose ONE style for the whole video: ${styleName}, tool id "${style}". About it: ${tool.what}\nEvery scene uses this style and only this style. Design every scene for what this style does well.\n\nWrite the video:
-- title (short), music (lofi/ambient/upbeat/epic/none).
-- scenes: one picture each, 2-6 s, contiguous from 0, total 20-45 s unless the idea asks for another length.
-- visual: exactly what we see (subject, action, framing), concrete enough to animate.
-- narration: what the voice says in that scene, at most 2.4 words per second of the scene ("" for a silent beat).
-- onscreen: text burned into the picture ("" if none). sound: the sound moment.
-- tool: always "${style}".`;
+  const system = SCRIPT_SYSTEM;
+  const input = scriptInput({ prompt, format, styleName, style, toolWhat: tool.what });
 
   (async () => {
     try {

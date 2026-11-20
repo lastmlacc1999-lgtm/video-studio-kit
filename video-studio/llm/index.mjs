@@ -33,6 +33,7 @@ export async function createClient(cfg, purpose = 'build', { onLog, signal, fetc
       timeoutMs: limit,
       providerLabel: cfg.label,
       fetchImpl,
+      onLog,
     });
   }
 

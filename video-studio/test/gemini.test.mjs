@@ -177,6 +177,42 @@ test('retries with a dummy signature on every call when Gemini rejects a batch',
   } finally { await server.close(); }
 });
 
+test('copies the turn signature onto every parallel call when Gemini requires it', async () => {
+  const server = await mockServer((req, requests) => {
+    const parts = req.body.contents[1].parts;
+    if (requests.length === 1) {
+      assert.equal(parts[0].thoughtSignature, 'sig-A');
+      assert.equal('thoughtSignature' in parts[1], false);
+      return {
+        status: 400,
+        json: { error: { code: 400, message: 'Function call is missing a thought_signature in functionCall parts. Additional data, function call `default_api:read_file`, position 2.' } },
+      };
+    }
+    assert.equal(requests.length, 2);
+    assert.equal(parts.length, 3);
+    for (const part of parts) assert.equal(part.thoughtSignature, 'sig-A');
+    return { json: geminiResponse({ text: 'recovered' }) };
+  });
+  try {
+    const client = geminiClient({ baseUrl: server.url, apiKey: 'k', model: 'm' });
+    const res = await client.chat({
+      messages: [
+        { role: 'user', content: 'build' },
+        { role: 'assistant', content: '', toolCalls: [
+          { name: 'list_files', args: {}, thoughtSignature: 'sig-A' },
+          { name: 'read_file', args: { path: 'SKILL.md' } },
+          { name: 'grep', args: { pattern: 'x' } },
+        ] },
+        { role: 'tool', name: 'list_files', content: 'a.js' },
+        { role: 'tool', name: 'read_file', content: '# Skill' },
+        { role: 'tool', name: 'grep', content: 'x: 1' },
+      ],
+      tools: TOOL_DEFS,
+    });
+    assert.equal(res.text, 'recovered');
+  } finally { await server.close(); }
+});
+
 test('the native tool loop sends a prior call signature back with its functionCall', async () => {
   const server = await mockServer((req, requests) => {
     if (requests.length === 1) {

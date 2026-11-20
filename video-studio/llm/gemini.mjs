@@ -11,7 +11,7 @@ const cleanModel = (m) => String(m || '').replace(/^models\//, '').trim();
 // a field of the part next to functionCall, not inside functionCall. Keep it verbatim.
 // Docs: https://ai.google.dev/gemini-api/docs/thought-signatures
 // Marker for the installed replay logic; the patch README asks users to search for it.
-export const GEMINI_SIGNATURE_FIX = 2;
+export const GEMINI_SIGNATURE_FIX = 3;
 const DUMMY_THOUGHT_SIGNATURE = 'skip_thought_signature_validator';
 const signatureOf = (part) => {
   const sig = part?.thoughtSignature ?? part?.thought_signature;
@@ -21,10 +21,12 @@ const clone = (value) => (typeof structuredClone === 'function' ? structuredClon
 
 // Gemini returns a thought signature beside a functionCall and validates it again on the
 // next request. Keeping the raw model parts is safer than rebuilding them: it preserves
-// signatures, thought parts and the original order exactly. `signAll` is the repair mode
-// used only after Gemini rejects a request; it fills every unsigned functionCall with the
-// documented dummy so a stricter model cannot reject the second/third call in a batch.
-function toContents(system, messages, { signAll = false } = {}) {
+// signatures, thought parts and the original order exactly. Repair modes are used only
+// after Gemini rejects a request:
+//   inherit - copy the turn's real signature onto every unsigned functionCall (some Gemini
+//             3.x routes require one on every parallel call, not just the first);
+//   dummy   - use the documented skip_thought_signature_validator placeholder.
+function toContents(system, messages, { signMode = 'exact' } = {}) {
   const contents = [];
   const push = (role, parts) => {
     if (!parts.length) return;
@@ -32,10 +34,13 @@ function toContents(system, messages, { signAll = false } = {}) {
     if (last && last.role === role) last.parts.push(...parts);
     else contents.push({ role, parts });
   };
-  const signed = (part) => {
-    if (!signAll || !part?.functionCall || signatureOf(part)) return part;
-    part.thoughtSignature = DUMMY_THOUGHT_SIGNATURE;
-    return part;
+  const fill = (parts, turnSig) => {
+    if (signMode === 'exact') return parts;
+    for (const part of parts) {
+      if (!part?.functionCall || signatureOf(part)) continue;
+      part.thoughtSignature = signMode === 'inherit' && turnSig ? turnSig : DUMMY_THOUGHT_SIGNATURE;
+    }
+    return parts;
   };
   for (const m of messages) {
     if (m.role === 'tool') {
@@ -46,7 +51,9 @@ function toContents(system, messages, { signAll = false } = {}) {
     if (m.role === 'assistant') {
       // The exact parts returned by Gemini. Do not reorder or drop thought/signature parts.
       if (m.nativeParts?.length) {
-        push('model', m.nativeParts.map((p) => signed(clone(p))));
+        const raw = clone(m.nativeParts);
+        const turnSig = raw.map(signatureOf).find(Boolean) || '';
+        push('model', fill(raw, turnSig));
         continue;
       }
       const parts = [];
@@ -66,10 +73,13 @@ function toContents(system, messages, { signAll = false } = {}) {
         if (firstCall < 0) firstCall = parts.length;
         parts.push(callPart);
       }
-      // Old history, another provider, or a hand-built call has no signature. Gemini 3
-      // rejects the whole request in that case; the documented dummy skips validation.
-      if (signAll) for (const part of parts) signed(part);
-      else if (firstCall >= 0 && !signedCall) parts[firstCall].thoughtSignature = DUMMY_THOUGHT_SIGNATURE;
+      if (signMode !== 'exact') {
+        fill(parts, [textSig, ...calls.map(signatureOf)].find(Boolean) || '');
+      } else if (firstCall >= 0 && !signedCall) {
+        // Old history, another provider, or a hand-built call has no signature. Gemini 3
+        // rejects the whole request in that case; the documented dummy skips validation.
+        parts[firstCall].thoughtSignature = DUMMY_THOUGHT_SIGNATURE;
+      }
       push('model', parts);
       continue;
     }
@@ -80,7 +90,7 @@ function toContents(system, messages, { signAll = false } = {}) {
 
 export function geminiClient({
   baseUrl = 'https://generativelanguage.googleapis.com', apiKey, model,
-  timeoutMs = 900000, providerLabel = 'Gemini', fetchImpl = proxyFetch(),
+  timeoutMs = 900000, providerLabel = 'Gemini', fetchImpl = proxyFetch(), onLog = null,
 } = {}) {
   if (!apiKey) throw new LlmError(`${providerLabel}: no API key`, { provider: providerLabel, hint: 'Add a Gemini API key in Model settings, or set GEMINI_API_KEY.' });
   const root = String(baseUrl || '').replace(/\/+$/, '');
@@ -89,6 +99,7 @@ export function geminiClient({
   if (!name) throw new LlmError(`${providerLabel}: no model name`, { provider: providerLabel, hint: 'Use e.g. gemini-2.5-flash or gemini-2.5-pro.' });
   const endpoint = `${apiRoot}/models/${encodeURIComponent(name)}:generateContent`;
   const headers = { 'x-goog-api-key': apiKey };
+  onLog?.(`Gemini signature fix v${GEMINI_SIGNATURE_FIX} active`);
 
   async function chat({ system, messages, tools = null, jsonSchema = null, temperature, maxTokens, signal }) {
     const base = {};
@@ -105,22 +116,35 @@ export function geminiClient({
       base.tools = [{ functionDeclarations: tools.map((t) => ({ name: t.name, description: t.description, parameters: toGeminiSchema(t.parameters) })) }];
       base.toolConfig = { functionCallingConfig: { mode: 'AUTO' } };
     }
-    const send = (signAll) => postJson(
+    const send = (signMode) => postJson(
       endpoint,
-      { ...base, contents: toContents(system, messages, { signAll }) },
+      { ...base, contents: toContents(system, messages, { signMode }) },
       { headers, timeoutMs, signal, fetchImpl, provider: providerLabel },
     );
     const isSignatureError = (e) => e?.status === 400 && /thought[_ ]?signature/i.test(`${e.body || ''} ${e.message || ''}`);
 
-    let json;
+    let json = null;
     try {
-      ({ json } = await send(false));
-    } catch (e) {
-      // Some Gemini 3.x models validate every functionCall part, not just the first one
-      // in a parallel batch. Retry once with the documented dummy on every unsigned call.
-      if (!isSignatureError(e)) throw e;
-      console.warn(`[${providerLabel}] thought_signature rejected; retrying with repaired history`);
-      ({ json } = await send(true));
+      ({ json } = await send('exact'));
+    } catch (firstError) {
+      if (!isSignatureError(firstError)) throw firstError;
+      // Some Gemini 3.x routes require a signature on every functionCall part, not only
+      // the first one in a parallel batch. Try the turn's real signature first, then the
+      // documented dummy placeholder.
+      let lastError = firstError;
+      for (const signMode of ['inherit', 'dummy']) {
+        const note = `[${providerLabel}] thought_signature rejected; retrying with ${signMode} signatures`;
+        console.warn(note);
+        onLog?.(note);
+        try {
+          ({ json } = await send(signMode));
+          break;
+        } catch (e) {
+          if (!isSignatureError(e)) throw e;
+          lastError = e;
+        }
+      }
+      if (!json) throw lastError;
     }
     const blocked = json.promptFeedback?.blockReason;
     if (blocked) throw new LlmError(`${providerLabel} refused the prompt (${blocked})`, { provider: providerLabel, hint: 'Rephrase the idea; Gemini blocks some requests by policy.' });

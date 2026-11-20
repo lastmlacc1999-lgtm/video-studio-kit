@@ -8,6 +8,8 @@ description: Make a video from an idea with every video tool installed in this b
 Paths: `BUILD` = the `AI Video generator` folder (this skill lives in `BUILD/.claude/skills/video-studio`). `VS` = `BUILD/video-studio`.
 Everything is free and local: Claude (this session) writes and builds, the repos render, Kokoro speaks only when the user turns the voice-over on (it is off by default).
 
+Model backends: the Video Studio app (**⚙** in the UI) can also write and build with Google Gemini, OpenAI GPT or a local GGUF model through `video-studio/llm/`. This skill is what Claude Code follows; the build recipes and `vs.mjs` commands below are backend-agnostic, so the same steps apply whichever model runs them.
+
 ## 1. Open the studio
 - Is the UI already up? `curl -s -o /dev/null -w "%{http_code}" http://localhost:4790/api/catalog`. If not, start it **in the background**: `node "$VS/vs.mjs" serve`.
 - Read `$VS/catalog.json` once: every tool, its styles, status, speed and how to build with it (`build`), plus the example clip.

@@ -1,9 +1,88 @@
-// Video Studio UI: prompt (always open) → Claude writes the script → you edit/validate → Claude generates the video.
+// Video Studio UI: prompt (always open) → the chosen model writes the script → you edit/validate → it generates the video.
+// The model backend (Claude Code, Gemini, OpenAI GPT or a local GGUF file) is picked in the ⚙ panel.
 const $ = (s) => document.querySelector(s);
 const api = async (url, opts = {}) => { const r = await fetch(url, { cache: 'no-store', headers: { 'Content-Type': 'application/json' }, ...opts }); return r.json(); };
-let CAT = null, P = null, slug = new URLSearchParams(location.search).get('p'), dirty = false, saveTimer = null, selected = null;
+let CAT = null, P = null, slug = new URLSearchParams(location.search).get('p'), dirty = false, saveTimer = null, selected = null, SETTINGS = null;
 
 const toolById = (id) => CAT.tools.find((t) => t.id === id);
+
+// ---------- model backend (Claude Code, Gemini, OpenAI GPT, local GGUF) ----------
+const backendLabel = () => SETTINGS?.label || 'Claude Code';
+function applyBackend() {
+  $('#writingText').textContent = `${P?.llm?.label || backendLabel()} is writing the script…`;
+  const b = $('#backendBadge');
+  if (!SETTINGS) { b.hidden = true; return; }
+  b.hidden = false;
+  b.textContent = SETTINGS.description || SETTINGS.label;
+  b.classList.toggle('ready', !!SETTINGS.ready && !SETTINGS.unknown);
+  b.title = `${SETTINGS.description}\n${SETTINGS.readyDetail || ''}\nClick to change the model`;
+  $('#modelBtn').title = `Model: ${SETTINGS.description}${SETTINGS.ready ? '' : ' (not ready)'} — click to change`;
+}
+async function loadSettings() { try { SETTINGS = await api('/api/settings'); } catch { SETTINGS = null; } applyBackend(); }
+const providerById = (id) => (SETTINGS?.providers || []).find((p) => p.id === id);
+function llmStatus(text, kind = '') {
+  const el = $('#llmStatus');
+  el.hidden = !text; el.className = 'llm-status full ' + kind; el.textContent = text || '';
+}
+function openModel() {
+  if (!SETTINGS || !SETTINGS.providers) { alert('Could not read the model settings. Is the studio server running?'); return; }
+  const s = SETTINGS;
+  $('#llmProvider').innerHTML = s.providers.map((p) => `<option value="${p.id}">${esc(p.label)}</option>`).join('');
+  $('#llmProvider').value = s.provider;
+  $('#llmScriptModel').value = s.scriptModel || '';
+  $('#llmBuildModel').value = s.buildModel || '';
+  $('#llmApiKey').value = '';
+  $('#llmApiKey').placeholder = s.hasApiKey ? (s.apiKeyFromEnv ? `using ${s.apiKeyFromEnv}` : 'saved — type to replace') : 'paste the key';
+  $('#llmBaseUrl').value = s.baseUrl || '';
+  $('#llmGguf').value = s.ggufPath || '';
+  $('#llmLlamaServer').value = s.llamaServer || '';
+  $('#llmPort').value = s.localPort || 8080;
+  $('#llmCtx').value = s.ctxSize || 16384;
+  $('#llmGpuLayers').value = s.gpuLayers ?? 'auto';
+  $('#llmRuntime').value = s.localRuntime || 'auto';
+  $('#llmToolMode').value = s.toolMode || 'auto';
+  $('#llmMaxSteps').value = s.maxSteps || 160;
+  $('#llmCurrent').innerHTML = `Active: <b>${esc(s.description)}</b> — ${s.ready ? 'ready' : esc(s.readyDetail)}`;
+  $('#llmModels').innerHTML = '';
+  llmStatus('');
+  updateProviderUI({ defaults: false });
+  if (s.error) llmStatus(`The settings file could not be read (${s.error}). Saving below repairs it and keeps a .bak copy.`, 'bad');
+  $('#modelModal').hidden = false;
+}
+function updateProviderUI({ defaults = false } = {}) {
+  const id = $('#llmProvider').value, p = providerById(id) || {};
+  $('#llmProviderHint').innerHTML = esc(p.hint || '') + (p.keyUrl ? ` <a href="${p.keyUrl}" target="_blank" rel="noopener">Get a key ↗</a>` : '');
+  $('#llmLocalFields').classList.toggle('on', id === 'local');
+  $('#llmKeyLabel').hidden = id === 'claude' || id === 'local';
+  if (defaults) {
+    const m = p.models || {};
+    $('#llmScriptModel').value = m.script || '';
+    $('#llmBuildModel').value = m.build || '';
+    $('#llmBaseUrl').value = id === 'local' ? localBaseFor($('#llmRuntime').value) : p.baseUrl || '';
+  }
+  $('#llmKeyState').textContent = id === 'local' ? 'Local servers need no key unless you set one on the server.' : id === 'claude' ? 'Claude Code uses your Claude plan — no API key.' : '';
+  $('#llmClearKey').hidden = !(SETTINGS?.hasApiKey && id === SETTINGS?.provider);
+}
+function localBaseFor(runtime) {
+  if (runtime === 'ollama') return 'http://127.0.0.1:11434/v1';
+  if (runtime === 'lmstudio') return 'http://127.0.0.1:1234/v1';
+  return `http://127.0.0.1:${+$('#llmPort').value || 8080}/v1`;
+}
+const llmPatch = () => ({
+  provider: $('#llmProvider').value,
+  scriptModel: $('#llmScriptModel').value.trim(),
+  buildModel: $('#llmBuildModel').value.trim(),
+  apiKey: $('#llmApiKey').value.trim(),
+  baseUrl: $('#llmBaseUrl').value.trim(),
+  ggufPath: $('#llmGguf').value.trim(),
+  llamaServer: $('#llmLlamaServer').value.trim(),
+  localRuntime: $('#llmRuntime').value,
+  localPort: +$('#llmPort').value || 8080,
+  ctxSize: +$('#llmCtx').value || 16384,
+  gpuLayers: $('#llmGpuLayers').value.trim() || 'auto',
+  toolMode: $('#llmToolMode').value,
+  maxSteps: +$('#llmMaxSteps').value || 160,
+});
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
 
 // ---------- catalog (only tools with a working example) ----------
@@ -139,13 +218,13 @@ function renderProject() {
   $('#empty').hidden = !!P; $('#proj').hidden = !P;
   if (!P) return;
   $('#title').value = P.title || ''; $('#format').value = P.format || '9:16'; $('#voice').value = P.voice?.on === true ? P.voice.voice : 'none'; $('#music').value = P.music && P.music !== 'auto' ? P.music : 'lofi';
-  $('#ideaLine').textContent = (P.styleName ? 'Style: ' + P.styleName + ' · ' : '') + (P.idea ? 'Prompt: ' + P.idea : '');
+  $('#ideaLine').textContent = (P.llm ? `Model: ${P.llm.label} · ${P.llm.model} · ` : '') + (P.styleName ? 'Style: ' + P.styleName + ' · ' : '') + (P.idea ? 'Prompt: ' + P.idea : '');
   const ps = $('#projectStyle'), cur = P.style || P.scenes.find((s) => s.tool)?.tool || '';
   ps.innerHTML = toolOptions(cur).replace('— pick —', 'Style: pick one'); ps.value = cur;
   ps.disabled = ['building', 'writing-script'].includes(P.status);
-  renderScenes(); renderLive();
+  renderScenes(); renderLive(); applyBackend();
 }
-const STATUS = { 'writing-script': 'writing script…', 'script-ready': 'script ready: edit & validate', ready: 'script ready: edit & validate', draft: 'draft', 'build-requested': 'waiting for Claude', building: 'generating video…', done: 'done', error: 'error' };
+const STATUS = { 'writing-script': 'writing script…', 'script-ready': 'script ready: edit & validate', ready: 'script ready: edit & validate', draft: 'draft', 'build-requested': 'waiting for the builder', building: 'generating video…', done: 'done', error: 'error' };
 function renderLive() {
   const st = $('#status'); st.textContent = STATUS[P.status] || P.status; st.className = 'status ' + P.status;
   const writing = P.status === 'writing-script';
@@ -193,7 +272,7 @@ $('#voice').onchange = () => { const v = $('#voice').value; P.voice = v === 'non
 $('#music').onchange = () => { P.music = $('#music').value; touch(); };
 $('#addScene').onclick = () => { if (!P) return; const last = P.scenes[P.scenes.length - 1]; const s0 = last ? +last.end : 0; P.scenes.push({ n: P.scenes.length + 1, start: s0, end: +(s0 + 3).toFixed(1), tool: last ? last.tool : '', visual: '', narration: '', onscreen: '', sound: '', notes: '' }); renderScenes(); touch(); };
 $('#build').onclick = async () => {
-  if (!confirm('Generate the video from this script? Claude Code will render every scene (this can take a while).')) return;
+  if (!confirm(`Generate the video from this script? ${backendLabel()} will render every scene (this can take a while).`)) return;
   if (dirty) await save();
   try { if (window.Notification && Notification.permission === 'default') Notification.requestPermission(); } catch {}
   P = await api(`/api/project/${P.slug}/build`, { method: 'POST', body: '{}' }); renderScenes(); renderLive();
@@ -214,8 +293,61 @@ setInterval(async () => {
   if (becameDone) announceFinal();
 }, 2500);
 
+$('#modelBtn').onclick = openModel;
+$('#backendBadge').onclick = openModel;
+$('#modelClose').onclick = () => { $('#modelModal').hidden = true; };
+$('#modelModal').addEventListener('click', (e) => { if (e.target.id === 'modelModal') $('#modelModal').hidden = true; });
+$('#llmProvider').onchange = () => updateProviderUI({ defaults: true });
+$('#llmRuntime').onchange = () => {
+  const base = $('#llmBaseUrl'), current = base.value.trim();
+  const known = ['', 'http://127.0.0.1:8080/v1', 'http://127.0.0.1:11434/v1', 'http://127.0.0.1:1234/v1'];
+  if (known.includes(current)) base.value = localBaseFor($('#llmRuntime').value);
+};
+$('#llmPort').onchange = () => {
+  const base = $('#llmBaseUrl');
+  if (base.value.trim() === '' || /^http:\/\/127\.0\.0\.1:\d+\/v1$/.test(base.value.trim())) base.value = localBaseFor($('#llmRuntime').value);
+};
+$('#llmSave').onclick = async () => {
+  $('#llmSave').disabled = true;
+  llmStatus('Saving…');
+  const r = await api('/api/settings', { method: 'PUT', body: JSON.stringify(llmPatch()) });
+  $('#llmSave').disabled = false;
+  if (r.error) return llmStatus(`Could not save: ${r.error}${r.hint ? '\n' + r.hint : ''}`, 'bad');
+  SETTINGS = r;
+  applyBackend();
+  $('#llmCurrent').innerHTML = `Active: <b>${esc(r.description)}</b> — ${r.ready ? 'ready' : esc(r.readyDetail)}`;
+  llmStatus(`Saved. ${r.description} is now the backend.${r.ready ? '' : '\n' + (r.readyDetail || '')}`, r.ready ? 'ok' : '');
+};
+$('#llmTest').onclick = async () => {
+  $('#llmTest').disabled = true;
+  llmStatus('Testing — a local GGUF model may need a minute to load…');
+  const r = await api('/api/settings/test', { method: 'POST', body: JSON.stringify(llmPatch()) });
+  $('#llmTest').disabled = false;
+  if (r.ok) llmStatus(`Connected to ${r.backend || r.label}: “${r.reply}” (${r.ms} ms, model ${r.model})`, 'ok');
+  else llmStatus(`Not connected: ${r.error}${r.hint ? '\n' + r.hint : ''}`, 'bad');
+};
+$('#llmLoadModels').onclick = async () => {
+  $('#llmLoadModels').disabled = true;
+  llmStatus('Loading models…');
+  const r = await api('/api/settings/models?provider=' + encodeURIComponent($('#llmProvider').value));
+  $('#llmLoadModels').disabled = false;
+  if (r.models?.length) {
+    $('#llmModels').innerHTML = r.models.map((m) => `<option value="${esc(m)}"></option>`).join('');
+    llmStatus(`${r.models.length} model${r.models.length === 1 ? '' : 's'}: ${r.models.slice(0, 12).join(', ')}${r.models.length > 12 ? '…' : ''}${r.note ? '\n' + r.note : ''}`, 'ok');
+  } else llmStatus(r.error ? `Could not list models: ${r.error}${r.hint ? '\n' + r.hint : ''}` : (r.note || 'No models reported.'), r.error ? 'bad' : '');
+};
+$('#llmClearKey').onclick = async () => {
+  const r = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ clearApiKey: true }) });
+  if (r.error) return llmStatus(r.error, 'bad');
+  SETTINGS = r; applyBackend();
+  $('#llmApiKey').value = ''; $('#llmApiKey').placeholder = 'paste the key';
+  llmStatus('Saved key removed.', 'ok');
+  updateProviderUI({ defaults: false });
+};
+
 (async () => {
   CAT = await api('/api/catalog');
+  await loadSettings();
   await loadProjects();
   if (slug) { P = await api('/api/project/' + slug); if (P.error) P = null; }
   lastStatus = P?.status;

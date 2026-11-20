@@ -1,0 +1,12 @@
+{
+  "name": "video-studio-kit",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Make short animated videos from a prompt with Claude Code, Gemini, OpenAI GPT or a local GGUF model.",
+  "scripts": {
+    "studio": "node video-studio/vs.mjs serve",
+    "setup": "node setup.mjs",
+    "test": "node video-studio/test/run.mjs"
+  }
+}

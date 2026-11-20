@@ -4,6 +4,14 @@ repos/
 outputs/
 tmp-remotion/
 video-studio/projects/
+# model backend settings (may contain an API key) — create it in the studio's ⚙ panel
+video-studio/llm.config.json
+video-studio/llm.config.*.json
+video-studio/llm.config.json.bak
+!video-studio/llm.config.example.json
+# local GGUF models and downloads
+*.gguf
+models/
 video-studio/server.log*
 video-studio/.empty-mcp.json
 studio/tts/*.onnx

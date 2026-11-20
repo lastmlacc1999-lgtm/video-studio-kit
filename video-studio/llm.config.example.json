@@ -1,0 +1,17 @@
+{
+  "provider": "claude",
+  "scriptModel": "",
+  "buildModel": "",
+  "baseUrl": "",
+  "apiKey": "",
+  "ggufPath": "",
+  "llamaServer": "",
+  "localRuntime": "auto",
+  "localPort": 8080,
+  "ctxSize": 16384,
+  "gpuLayers": "auto",
+  "toolMode": "auto",
+  "temperature": 0.6,
+  "maxSteps": 160,
+  "timeoutMs": 900000
+}

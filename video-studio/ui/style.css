@@ -139,3 +139,30 @@ table.scenes { width: 100%; border-collapse: collapse; min-width: 1100px; }
 .brand { min-width: 0; }
 .brand select { max-width: none; flex: 1; min-width: 0; text-overflow: ellipsis; overflow: hidden; }
 .new-video { flex: none; }
+
+/* model settings */
+.icon-btn { padding: 4px 8px; font-size: 14px; flex: none; }
+.badge.backend { background: #ece6da; color: var(--muted); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; border: 1px solid var(--line); }
+.badge.backend.ready { background: #e1f1e6; color: var(--ok); }
+.badge.backend:not([hidden]) { display: inline-block; }
+.model-card { width: min(780px, 96vw); overflow-y: auto; }
+.llm-current { margin: -4px 0 0; color: var(--muted); font-size: 13px; }
+.llm-current b { color: var(--ink); }
+.model-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.model-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.model-grid label.full, .model-grid .full { grid-column: 1 / -1; }
+.model-grid input, .model-grid select { border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; background: #fff; color: var(--ink); font-size: 13px; }
+.model-grid small { color: var(--muted); font-size: 11.5px; }
+.model-grid small a { color: var(--accent); }
+.local-fields { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px 12px; margin: 0; display: none; }
+.local-fields.on { display: block; }
+.local-fields legend { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding: 0 6px; }
+.local-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.local-grid label.full { grid-column: 1 / -1; }
+.llm-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+.llm-status { font-size: 12.5px; padding: 8px 10px; border-radius: 10px; background: #f3eee4; white-space: pre-wrap; }
+.llm-status.ok { background: #e1f1e6; color: #2f7a4d; }
+.llm-status.bad { background: #f6e1dc; color: #9a3a2c; }
+.llm-foot { margin: 0; font-size: 11.5px; color: var(--muted); }
+.llm-foot code { font-size: 11px; }
+@media (max-width: 700px) { .model-grid, .local-grid { grid-template-columns: 1fr; } }

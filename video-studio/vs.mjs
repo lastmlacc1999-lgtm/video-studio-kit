@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Video Studio: a tiny local server for the UI, plus the commands Claude uses to talk to it.
+// Video Studio: a tiny local server for the UI, plus the commands the builder uses to talk to it.
 //   node vs.mjs serve [--port 4790]                 start the UI (http://localhost:4790)
+//   Model settings: GET/PUT /api/settings, POST /api/settings/test, GET /api/settings/models
 //   node vs.mjs new <slug> <project.json>           create/replace a project from a file
 //   node vs.mjs wait <slug> [--timeout 3600]        block until the user presses Build or sends a note; prints JSON
 //   node vs.mjs progress <slug> "text" [--scene N] [--clip path] [--status building|done|error]
@@ -13,6 +14,8 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { writeScript, buildProject, stopBuild } from './agent.mjs';
+import { resolveConfig, publicConfig, saveConfig, previewConfig, clearApiKey, describeConfig } from './llm/config.mjs';
+import { testConnection, listModels } from './llm/index.mjs';
 const MANUAL = process.env.VS_MANUAL === '1'; // 1 = an interactive Claude session builds (vs.mjs wait)
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -34,6 +37,8 @@ function publishFinal(p) {
   return dst;
 }
 const blank = (slug) => ({ slug, title: slug, idea: '', format: '9:16', voice: { engine: 'kokoro', voice: 'none', on: false }, music: 'auto', status: 'draft', scenes: [], notes: [], log: [], final: null, createdAt: now() });
+
+const settings = (cfg) => ({ ...publicConfig(cfg), backend: describeConfig(cfg) });
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.mp4': 'video/mp4', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml' };
 
@@ -69,6 +74,46 @@ async function handle(req, res) {
   if (p === '/api/projects') {
     const list = fs.readdirSync(PROJECTS).filter((d) => fs.existsSync(pfile(d))).map((d) => { const x = load(d); return { slug: x.slug, title: x.title, status: x.status, updatedAt: x.updatedAt }; });
     return json(res, 200, list.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || '')));
+  }
+  if (p === '/api/settings' && req.method === 'GET') {
+    try { return json(res, 200, settings(resolveConfig())); }
+    catch (e) {
+      const fallback = resolveConfig({ file: {} });
+      return json(res, 200, { ...publicConfig(fallback), backend: describeConfig(fallback), error: e.message });
+    }
+  }
+  if (p === '/api/settings' && req.method === 'PUT') {
+    const b = await body(req);
+    try {
+      if (b.clearApiKey) clearApiKey();
+      const cfg = saveConfig(b);
+      return json(res, 200, settings(cfg));
+    } catch (e) { return json(res, 400, { error: e.message, hint: e.hint || '' }); }
+  }
+  if (p === '/api/settings/test' && req.method === 'POST') {
+    const b = await body(req);
+    let cfg;
+    try { cfg = Object.keys(b).length ? previewConfig(b) : resolveConfig(); }
+    catch (e) { return json(res, 400, { ok: false, error: e.message, hint: e.hint || '' }); }
+    try {
+      const out = await testConnection(cfg);
+      return json(res, 200, { ...out, backend: describeConfig(cfg) });
+    } catch (e) {
+      return json(res, 200, { ok: false, error: e.message, hint: e.hint || '', code: e.code || '', backend: describeConfig(cfg) });
+    }
+  }
+  if (p === '/api/settings/models' && req.method === 'GET') {
+    let cfg;
+    try { cfg = resolveConfig(); } catch (e) { return json(res, 400, { models: [], error: e.message }); }
+    const q = u.searchParams.get('provider');
+    if (q) { try { cfg = previewConfig({ provider: q }); } catch { /* keep the saved config */ } }
+    try { return json(res, 200, await listModels(cfg)); }
+    catch (e) { return json(res, 200, { models: [], error: e.message, hint: e.hint || '' }); }
+  }
+  // a provider-free check the UI uses to show which backend is active
+  if (p === '/api/backend' && req.method === 'GET') {
+    try { const cfg = resolveConfig(); return json(res, 200, settings(cfg)); }
+    catch (e) { return json(res, 200, { error: e.message }); }
   }
   if (p === '/api/script' && req.method === 'POST') {
     const b = await body(req); const prompt = String(b.prompt || '').trim();
@@ -112,10 +157,25 @@ async function handle(req, res) {
   json(res, 404, { error: 'not found' });
 }
 
+export function createStudioServer() {
+  return http.createServer((req, res) => handle(req, res).catch((e) => json(res, 500, { error: String(e) })));
+}
+
+const isMain = (() => {
+  try {
+    const self = fileURLToPath(import.meta.url);
+    const argv = path.resolve(process.argv[1] || '');
+    return process.platform === 'win32' ? argv.toLowerCase() === self.toLowerCase() : argv === self;
+  } catch { return false; }
+})();
+
 const cmd = process.argv[2];
-if (cmd === 'serve') {
-  const port = +arg('--port', 4790);
-  http.createServer((req, res) => handle(req, res).catch((e) => json(res, 500, { error: String(e) }))).listen(port, '127.0.0.1', () => console.log(`Video Studio: http://localhost:${port}`));
+if (!isMain) {
+  // imported by a test or another script: leave the CLI alone
+} else if (cmd === 'serve') {
+  const port = +arg('--port', process.env.VS_PORT || 4790);
+  const host = process.env.VS_HOST || '127.0.0.1';
+  createStudioServer().listen(port, host, () => console.log(`Video Studio: http://localhost:${port}${host === '127.0.0.1' ? '' : ` (bound to ${host})`}`));
 } else if (cmd === 'new') {
   const slug = process.argv[3]; if (!slugOk(slug)) { console.error('slug: lowercase letters, digits, hyphens'); process.exit(2); }
   const data = JSON.parse(fs.readFileSync(process.argv[4], 'utf8'));

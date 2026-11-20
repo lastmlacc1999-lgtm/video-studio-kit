@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Video Studio kit — one-time setup.   node setup.mjs [--all] [--skip-voice]
-//   1. checks the tools you need (Node 20+, git, ffmpeg, Python 3.10+, Claude Code logged in; Blender optional)
+//   1. checks the tools you need (Node 20+, git, ffmpeg, Python 3.10+, a model backend; Blender optional)
 //   2. clones the third-party repos it needs at the pinned commits in repos.json (--all: every repo, incl. optional ones)
 //   3. installs the Remotion skills from their own repo, applies our additions (overlays/)
 //   4. npm installs the studio, the demos and lemo-opuscar, and the headless browser the renderers use
@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { resolveConfig } from './video-studio/llm/config.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const ALL = process.argv.includes('--all'), SKIP_VOICE = process.argv.includes('--skip-voice');
@@ -29,9 +30,31 @@ out('git', ['--version']) ? ok('git') : (bad('git not found: https://git-scm.com
 out('ffmpeg', ['-version']) ? ok('ffmpeg') : (bad('ffmpeg not found on PATH: https://ffmpeg.org/download.html (Windows: winget install Gyan.FFmpeg)'), missing++);
 const PY = ['python', 'python3', 'py'].find((p) => /Python 3\.(1\d|[2-9]\d)/.test(out(p, ['--version']) || ''));
 PY ? ok(`Python (${out(PY, ['--version'])})`) : (bad('Python 3.10+ not found: https://www.python.org'), missing++);
+// the model backend: Claude Code (default), Gemini, OpenAI GPT or a local GGUF file
+let cfg = null;
+try { cfg = resolveConfig(); } catch (e) { warn(`Model settings could not be read (${e.message}); falling back to Claude Code`); }
+const backend = cfg?.provider || 'claude';
 const claude = out('claude', ['--version']);
-if (!claude) { bad('Claude Code not found: https://claude.com/claude-code (then run `claude` once and log in with your Claude account)'); missing++; }
-else { const st = out('claude', ['auth', 'status']) || ''; /"loggedIn":\s*true/.test(st) ? ok(`Claude Code ${claude.split(' ')[0]} (logged in)`) : warn(`Claude Code ${claude.split(' ')[0]}: run \`claude\` once and log in with your subscription`); }
+if (!claude) {
+  if (backend === 'claude') { bad('Claude Code not found: https://claude.com/claude-code (then run `claude` once and log in with your Claude account) — or pick Gemini/GPT/GGUF in the studio’s ⚙ Model panel'); missing++; }
+  else warn(`Claude Code not found (not needed: ${cfg.label} is the selected backend)`);
+} else {
+  const st = out('claude', ['auth', 'status']) || '';
+  const loggedIn = /"loggedIn":\s*true/.test(st);
+  if (backend === 'claude') loggedIn ? ok(`Claude Code ${claude.split(' ')[0]} (logged in)`) : warn(`Claude Code ${claude.split(' ')[0]}: run \`claude\` once and log in with your subscription`);
+  else loggedIn ? ok(`Claude Code ${claude.split(' ')[0]} (available, but ${cfg.label} is selected)`) : ok(`Claude Code ${claude.split(' ')[0]} (available, not logged in)`);
+}
+if (cfg) {
+  if (backend === 'gemini' || backend === 'openai') {
+    cfg.apiKey ? ok(`${cfg.label} key ${cfg.apiKeyFromEnv ? `from ${cfg.apiKeyFromEnv}` : 'saved in video-studio/llm.config.json'}`)
+      : warn(`${cfg.label} has no API key yet — add one in the studio’s ⚙ Model panel (or set ${backend === 'gemini' ? 'GEMINI_API_KEY' : 'OPENAI_API_KEY'})`);
+  } else if (backend === 'local') {
+    if (cfg.ggufPath && !fs.existsSync(cfg.ggufPath)) warn(`GGUF file not found: ${cfg.ggufPath}`);
+    else if (cfg.ggufPath) ok(`local GGUF model: ${cfg.ggufPath}`);
+    else warn(`Local backend selected with no GGUF file: start Ollama / LM Studio / llama-server at ${cfg.baseUrl}, or set the .gguf path in the studio’s ⚙ Model panel`);
+    if (cfg.ggufPath) out(cfg.llamaServer || 'llama-server', ['--version']) ? ok('llama-server found (it will start your GGUF model)') : warn('llama-server not found on PATH: install llama.cpp, or set its path in the studio’s ⚙ Model panel');
+  }
+}
 const blender = process.env.BLENDER || (WIN ? ['5.3', '5.2', '5.1', '5.0', '4.5', '4.4', '4.3', '4.2'].map((v) => `C:/Program Files/Blender Foundation/Blender ${v}/blender.exe`).find((p) => fs.existsSync(p)) : (out('which', ['blender']) || (fs.existsSync('/Applications/Blender.app/Contents/MacOS/Blender') ? '/Applications/Blender.app/Contents/MacOS/Blender' : null)));
 blender ? ok(`Blender (${blender}) — set BLENDER to this path for the Blender styles`) : warn('Blender not found (optional: only the Blender clay / 3D styles need it). https://www.blender.org');
 if (missing) { console.log(`\n${missing} requirement(s) missing: install them and run node setup.mjs again.`); process.exit(1); }
@@ -94,6 +117,9 @@ else {
 }
 
 say('Done.');
+const backendText = cfg ? `${cfg.label} · ${cfg.buildModel}` : 'Claude Code';
 console.log(`  Start the studio:  ${WIN ? 'double-click "Start Video Studio.cmd"' : 'sh start-studio.sh'}   (or: node video-studio/vs.mjs serve, then http://localhost:4790)
-  Or from Claude Code in this folder:  /video-studio <your idea>
-  Everything runs on your machine with your own Claude subscription (Claude Code). No API keys needed.`);
+  Current model backend:  ${backendText} — change it with the ⚙ button in the studio.
+  Claude Code / Gemini / OpenAI GPT / local GGUF all work for writing the script and building the video.
+  Or from Claude Code in this folder:  /video-studio <your idea>  (that path still uses Claude Code)
+  ${cfg?.provider === 'claude' ? 'Everything runs on your machine with your own Claude subscription. No API keys needed.' : cfg?.provider === 'local' ? 'Local models stay on this machine; nothing is sent anywhere.' : 'Cloud models are called directly with your own key.'}`);

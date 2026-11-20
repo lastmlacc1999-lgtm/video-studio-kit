@@ -13,6 +13,7 @@
       <span class="spark">✳</span>
       <select id="projectPick" title="Your videos"></select>
       <button id="newVideo" class="ghost small new-video" title="Start a new video">+ New video</button>
+      <button id="modelBtn" class="ghost small icon-btn" title="Choose the model that writes and builds">⚙</button>
     </div>
     <form id="promptForm" class="prompt card">
       <div class="prompt-style">Style for the video: <b id="promptStyle">pick one below</b></div>
@@ -37,6 +38,7 @@
           <span id="previewSub" class="psub"></span>
         </div>
         <div class="stage-actions">
+          <button id="backendBadge" class="badge backend" title="Model backend — click to change" hidden></button>
           <button id="useInScene" class="ghost" disabled>Use in scene…</button>
           <button id="showFinal" class="primary small" hidden>▶ Final video</button>
           <a href="#project" class="ghost link">Script ↓</a>
@@ -53,7 +55,7 @@
     <section class="project card" id="project">
       <div id="empty" class="empty">
         <h2>Write a prompt to start</h2>
-        <p>Describe your video in the box on the left. Claude writes the script, scene by scene and second by second, using the styles you see here. You edit it, validate it, and the video gets made.</p>
+        <p>Describe your video in the box on the left. The model writes the script, scene by scene and second by second, using the styles you see here. You edit it, validate it, and the video gets made.</p>
       </div>
       <div id="proj" hidden>
         <header class="proj-head">
@@ -74,7 +76,7 @@
         </header>
         <p id="ideaLine" class="idea-line"></p>
 
-        <div id="writing" class="writing" hidden><span class="dot"></span> Claude is writing the script…</div>
+        <div id="writing" class="writing" hidden><span class="dot"></span> <span id="writingText">Claude is writing the script…</span></div>
 
         <div id="scriptBlock">
           <div class="scenes-head">
@@ -84,7 +86,7 @@
           </div>
           <div class="table-wrap">
             <table class="scenes">
-              <thead><tr><th>#</th><th>Time (s)</th><th>Style</th><th>What we see</th><th>Narration</th><th>On-screen text</th><th>Sound</th><th>Notes for Claude</th><th></th></tr></thead>
+              <thead><tr><th>#</th><th>Time (s)</th><th>Style</th><th>What we see</th><th>Narration</th><th>On-screen text</th><th>Sound</th><th>Notes for the model</th><th></th></tr></thead>
               <tbody id="sceneRows"></tbody>
             </table>
           </div>
@@ -102,6 +104,83 @@
       </div>
     </section>
   </main>
+</div>
+<div id="modelModal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="modelTitle">
+  <div class="modal-card model-card">
+    <header class="modal-head">
+      <div><span class="modal-kicker">Model backend</span><h2 id="modelTitle">Who writes and builds</h2></div>
+      <button id="modelClose" class="ghost">Close</button>
+    </header>
+    <p id="llmCurrent" class="llm-current"></p>
+    <div class="model-grid">
+      <label class="full">Provider
+        <select id="llmProvider"></select>
+        <small id="llmProviderHint"></small>
+      </label>
+      <label>Model for the script
+        <input id="llmScriptModel" list="llmModels" autocomplete="off" spellcheck="false">
+      </label>
+      <label>Model for the build
+        <input id="llmBuildModel" list="llmModels" autocomplete="off" spellcheck="false">
+      </label>
+      <label class="full" id="llmKeyLabel">API key
+        <input id="llmApiKey" type="password" autocomplete="off" spellcheck="false">
+        <small id="llmKeyState"></small>
+      </label>
+      <label class="full">Base URL
+        <input id="llmBaseUrl" autocomplete="off" spellcheck="false" placeholder="https://…">
+      </label>
+      <fieldset class="full local-fields" id="llmLocalFields">
+        <legend>Local GGUF</legend>
+        <div class="local-grid">
+          <label class="full">GGUF file
+            <input id="llmGguf" placeholder="D:\models\qwen2.5-14b-instruct-q4_k_m.gguf" autocomplete="off" spellcheck="false">
+          </label>
+          <label>Runtime
+            <select id="llmRuntime">
+              <option value="auto">auto (GGUF → llama.cpp)</option>
+              <option value="llama.cpp">llama.cpp server</option>
+              <option value="ollama">Ollama</option>
+              <option value="lmstudio">LM Studio</option>
+              <option value="server">already running (keep Base URL)</option>
+            </select>
+          </label>
+          <label>llama-server binary
+            <input id="llmLlamaServer" placeholder="llama-server (on PATH)" autocomplete="off" spellcheck="false">
+          </label>
+          <label>Port
+            <input id="llmPort" type="number" min="1" max="65535">
+          </label>
+          <label>Context size
+            <input id="llmCtx" type="number" min="512" step="512">
+          </label>
+          <label>GPU layers
+            <input id="llmGpuLayers" placeholder="auto" autocomplete="off" spellcheck="false">
+          </label>
+          <label>Tool calling
+            <select id="llmToolMode">
+              <option value="auto">auto (recommended)</option>
+              <option value="native">native function calls</option>
+              <option value="text">text protocol (models without tools)</option>
+            </select>
+          </label>
+          <label>Max tool steps
+            <input id="llmMaxSteps" type="number" min="1" max="2000">
+          </label>
+        </div>
+        <small>Leave the GGUF file empty to use a server you started yourself (Ollama, LM Studio, llama-server). With a .gguf file, llama-server is started for you when a script or build needs it.</small>
+      </fieldset>
+      <div class="full llm-actions">
+        <button id="llmLoadModels" class="ghost small">Load models</button>
+        <button id="llmTest" class="ghost small">Test connection</button>
+        <button id="llmClearKey" class="ghost small" hidden>Remove saved key</button>
+        <button id="llmSave" class="primary small">Save</button>
+      </div>
+      <div id="llmStatus" class="llm-status full" hidden></div>
+    </div>
+    <p class="llm-foot">Saved in <code>video-studio/llm.config.json</code> on this computer (git-ignored), or read from <code>GEMINI_API_KEY</code> / <code>OPENAI_API_KEY</code> / <code>VS_*</code>. Claude Code remains the default.</p>
+    <datalist id="llmModels"></datalist>
+  </div>
 </div>
 <div id="finalModal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="finalTitle">
   <div class="modal-card">

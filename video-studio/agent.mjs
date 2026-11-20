@@ -83,7 +83,7 @@ function catalogFacts(styles) {
       return `- ${v} — ${st?.name || t.name}${st && st.name !== t.name ? ` (${t.name})` : ''}
   what: ${t.what}
   speed: ${t.speed || '?'}
-  skill: .claude/skills/${t.skill}
+  skill: ${path.join(BUILD, '.claude', 'skills', t.skill)}
   build: ${t.build || '(see the skill)'}
   source: ${t.repo || ''}`;
     }).join('\n');

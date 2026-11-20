@@ -52,7 +52,7 @@ test('a Gemini/GPT/local style build runs the shell and finishes the project', a
       assert.match(task, /"visual": "a cat"/);
       assert.match(task, /## The style\(s\) to build it with/);
       assert.match(task, /tvhead\/prehistoric/);
-      assert.match(task, /skill: \.claude\/skills\/tvhead-video/);
+      assert.match(task, /skill: .*\.claude[\\/]skills[\\/]tvhead-video/);
       assert.doesNotMatch(task, /"styles":/, 'the whole 32 KB catalog is not dumped into the prompt');
       return { json: chatResponse({ toolCalls: [{ name: 'bash', arguments: { command: finish } }] }) };
     }

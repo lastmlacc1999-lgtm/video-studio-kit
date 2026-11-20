@@ -185,6 +185,20 @@ export function createToolkit({ cwd, roots = [cwd], signal, env = {}, log } = {}
     return abs;
   };
 
+  // Skills live at the kit root, but models often ask for `.claude/skills/...` as a
+  // relative path. Reads may fall back to any allowed root; writes/edits may not.
+  const readable = (p) => {
+    const abs = safe(p);
+    if (fs.existsSync(abs) || path.isAbsolute(expandHome(String(p || '')))) return abs;
+    for (const root of allowedRoots) {
+      const candidate = path.resolve(root, String(p || ''));
+      if (candidate !== abs && isInside(root, candidate) && fs.existsSync(candidate)) {
+        try { return safe(candidate); } catch { /* outside a root: keep looking */ }
+      }
+    }
+    return abs;
+  };
+
   async function bash(args = {}) {
     const command = String(args.command || '').trim();
     if (!command) return { ok: false, output: 'no command given' };
@@ -220,7 +234,7 @@ export function createToolkit({ cwd, roots = [cwd], signal, env = {}, log } = {}
   }
 
   function readFile(args = {}) {
-    const file = safe(args.path);
+    const file = readable(args.path);
     if (!fs.existsSync(file)) return { ok: false, output: `no such file: ${args.path}` };
     if (fs.statSync(file).isDirectory()) return { ok: false, output: `${args.path} is a folder; use list_files` };
     const content = fs.readFileSync(file, 'utf8');
@@ -256,7 +270,7 @@ export function createToolkit({ cwd, roots = [cwd], signal, env = {}, log } = {}
   }
 
   function listFiles(args = {}) {
-    const base = args.path ? safe(args.path) : workdir;
+    const base = args.path ? readable(args.path) : workdir;
     if (!fs.existsSync(base)) return { ok: false, output: `no such place: ${args.path}` };
     const pattern = args.pattern || '**/*';
     const re = globToRegExp(pattern);
@@ -272,7 +286,7 @@ export function createToolkit({ cwd, roots = [cwd], signal, env = {}, log } = {}
     if (!pattern) return { ok: false, output: 'no pattern given' };
     let re;
     try { re = new RegExp(pattern, args.ignore_case ? 'i' : ''); } catch (e) { return { ok: false, output: `bad regular expression: ${e.message}` }; }
-    const base = args.path ? safe(args.path) : workdir;
+    const base = args.path ? readable(args.path) : workdir;
     if (!fs.existsSync(base)) return { ok: false, output: `no such place: ${args.path}` };
     const files = fs.statSync(base).isFile() ? [base] : walk(base);
     const limit = Math.min(Math.max(Number(args.limit) || 80, 1), 400);

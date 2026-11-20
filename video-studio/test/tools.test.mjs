@@ -99,3 +99,19 @@ test('a symlink cannot be used to escape the sandbox', { skip: process.platform 
   assert.match(r.output, /refusing to touch/);
   assert.equal(fs.existsSync(path.join(outside, 'evil.txt')), false);
 });
+
+test('reads build skills by relative path without letting writes escape', async () => {
+  const { build, kit } = setup();
+  const skill = path.join(build, '.claude', 'skills', 'video-studio');
+  fs.mkdirSync(skill, { recursive: true });
+  fs.writeFileSync(path.join(skill, 'SKILL.md'), '# Build rules\n');
+  let r = await kit.run('read_file', { path: '.claude/skills/video-studio/SKILL.md' });
+  assert.equal(r.ok, true);
+  assert.match(r.output, /Build rules/);
+  r = await kit.run('list_files', { path: '.claude/skills/video-studio', pattern: '*.md' });
+  assert.equal(r.ok, true);
+  assert.match(r.output, /SKILL\.md/);
+  r = await kit.run('write_file', { path: '.claude/skills/video-studio/evil.md', content: 'x' });
+  assert.equal(r.ok, true);
+  assert.equal(fs.existsSync(path.join(build, '.claude', 'skills', 'video-studio', 'evil.md')), false);
+});
